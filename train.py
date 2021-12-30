@@ -1,73 +1,61 @@
-from model import SiburModel
-import pathlib
+from model import JigsawModel
+from pathlib import Path
 from dataset import get_loader
 import click
 import torch
 import pandas as pd
+from transformers import AutoTokenizer
 
 
 @click.command()
-@click.option('--data', help='Path to train data', default='../sc2021_train_deals.csv')
-@click.option('--model_weights', help='Path to saved model', default='./experiment/last.pth')
+@click.option('--data', help='Path to train data', default='data/jigsaw_train.csv')
 @click.option('--lr', help='Learning rate', default=1e-3)
 @click.option('--weight_decay', default = 5e-3)
 @click.option('--epochs', help='Number of epochs', default=30)
 @click.option('--resume/--no-resume', help='Resume training process', default=False)
 @click.option('--num_workers', help='Number of workers', default=2)
-@click.option('--random_state', default=42)
 @click.option('--batch_size', default=8)
 def main(
         data: str,
-        model_weights: str,
         lr: float,
         weight_decay: float,
         epochs: int,
         resume: bool,
         num_workers: int,
-        random_state: int,
         batch_size: int
         ):
-    torch.backends.cudnn.benchmark = True
-    torch.autograd.set_detect_anomaly(False)
-    torch.autograd.profiler.profile(False)
-    torch.autograd.profiler.emit_nvtx(False)
-
-    model = SiburModel(seed=random_state)
-    model_path = pathlib.Path(model_weights)
-    if model_path.exists():
+    # torch.backends.cudnn.benchmark = True
+    # torch.autograd.set_detect_anomaly(False)
+    # torch.autograd.profiler.profile(False)
+    # torch.autograd.profiler.emit_nvtx(False)
+    model_weights = 'experiment/last.pth'
+    model = JigsawModel()
+    model_path = Path(model_weights)
+    if resume and model_path.exists():
         model.load_model(model_path, load_train_info=resume)
-        print('Модель загружена с', model_path)
+        print('Model loaded from', model_path)
 
-    df = pd.read_csv(data, parse_dates=["month", "date"])   
-    train_dataloader = get_loader(
-        df,
-        shuffle=True,
-        period={
-            'start': '2018-01-01',
-            'end': '2020-07-01'
-            },
-        num_workers=num_workers,
-        task='train',
-        batch_size=batch_size
-        )
+    tokenizer = AutoTokenizer.from_pretrained('GroNLP/hateBERT',
+                                              model_max_length=256)
 
-    valid_dataloader = get_loader(
-        df,
-        shuffle=False,
-        period={
-            'start': '2018-01-01',
-            'end': '2020-08-01'
-            },
-        num_workers=num_workers,
-        task='valid',
-        encoder_path='ohe_encoder.pkl',
-        batch_size=batch_size
-        )
+    path = Path('data').joinpath('validation_data.csv')
+    df = pd.read_csv(path)
+    val_loaders = [
+        get_loader(df['less_toxic'], tokenizer, num_workers=num_workers,
+                   batch_size=batch_size),
+        get_loader(df['more_toxic'], tokenizer, num_workers=num_workers,
+                   batch_size=batch_size)
+        ]
+
+    path = Path(data)
+    df = pd.read_csv(path)
+    train_loader = get_loader(df, tokenizer,  num_workers=num_workers,
+                              batch_size=batch_size, train=True)
 
     model.fit(
         num_epochs=epochs,
-        train_loader=train_dataloader,
-        val_loader=valid_dataloader,
+        train_loader=train_loader,
+        val_loaders=val_loaders,
         folder='experiment',
         learning_rate=lr,
         weight_decay=weight_decay

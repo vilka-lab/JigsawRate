@@ -2,6 +2,9 @@ import pandas as pd
 import click
 from pathlib import Path
 from typing import List
+import re
+import emoji
+from tqdm import tqdm
 
 
 def read_toxic_data(folder_toxic: str) -> pd.DataFrame:
@@ -45,13 +48,14 @@ def read_unintended_data(folder_unintended: str, threshold: float) -> pd.DataFra
 def read_ruddit(folder_ruddit: str) -> pd.DataFrame:
     folder_ruddit = Path(folder_ruddit)
     df = pd.read_csv(folder_ruddit)
-    df = df.rename({'txt': 'comment_text'}, axis=1)
+    df = df.rename({'txt': 'comment_text', 'comment_id': 'id'}, axis=1)
 
     columns = ['comment_id', 'comment_text', 'offensiveness_score']
     df = df.loc[:, columns]
 
     df = df[df['comment_text'] != '[deleted]']
     df.loc[df['offensiveness_score'] < 0] = 0
+    print('Shape of ruddit data:', df.shape)
     return df
 
 
@@ -72,6 +76,18 @@ def calculate_score(df: pd.DataFrame) -> pd.DataFrame:
     df['offensiveness_score'] = df['offensiveness_score'] / df['offensiveness_score'].max()
     df.drop(columns, axis=1, inplace=True)
     return df
+
+
+def process_text(full_line: str) -> str:
+    full_line = str(full_line)
+    full_line = re.sub(r'#([^ ]*)', r'\1', full_line)
+    full_line = re.sub(r'https.*[^ ]', 'URL', full_line)
+    full_line = re.sub(r'http.*[^ ]', 'URL', full_line)
+    full_line = re.sub(r'@([^ ]*)', '@USER', full_line)
+    full_line = emoji.demojize(full_line)
+    full_line = re.sub(r'(:.*?:)', r' \1 ', full_line)
+    full_line = re.sub(' +', ' ', full_line)
+    return full_line
 
 
 @click.command()
@@ -108,6 +124,10 @@ def main(
     print('Ruddit dataset')
     ruddit = read_ruddit(folder_ruddit)
     total = pd.concat([total, ruddit])
+
+    print('Data preprocessing')
+    tqdm.pandas()
+    total['comment_text'] = total['comment_text'].progress_apply(process_text)
 
     num_duplicates = total.duplicated(subset='comment_text').sum()
     if num_duplicates > 0:
