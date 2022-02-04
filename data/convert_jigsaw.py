@@ -1,7 +1,7 @@
 import pandas as pd
 import click
 from pathlib import Path
-from typing import List
+# from typing import List
 import re
 import emoji
 from tqdm import tqdm
@@ -31,16 +31,14 @@ def read_unintended_data(folder_unintended: str, threshold: float) -> pd.DataFra
     folder_unintended = Path(folder_unintended)
     df = pd.read_csv(folder_unintended.joinpath('all_data.csv'))
     cols = ['id', 'comment_text', 'toxicity', 'severe_toxicity', 'obscene',
-            'identity_attack', 'insult', 'threat']
+            'identity_attack', 'sexual_explicit', 'insult', 'threat']
+    df['severe_toxicity'] *= 2
     df = df[cols]
-    df = df.rename({
-        'toxicity': 'toxic',
-        'severe_toxicity': 'severe_toxic',
-        'identity_attack': 'identity_hate'},
-        axis=1)
 
     cols_with_scores = df.drop(['id', 'comment_text'], axis=1).columns
-    df[cols_with_scores] = (df[cols_with_scores] > 0.5).astype(int)
+    df['offensiveness_score'] = df[cols_with_scores].mean(axis=1)
+
+    df = df[['id', 'comment_text', 'offensiveness_score']]
     print('Shape of unintended data:', df.shape)
     return df
 
@@ -50,7 +48,7 @@ def read_ruddit(folder_ruddit: str) -> pd.DataFrame:
     df = pd.read_csv(folder_ruddit)
     df = df.rename({'txt': 'comment_text', 'comment_id': 'id'}, axis=1)
 
-    columns = ['comment_id', 'comment_text', 'offensiveness_score']
+    columns = ['id', 'comment_text', 'offensiveness_score']
     df = df.loc[:, columns]
 
     df = df[df['comment_text'] != '[deleted]']
@@ -68,25 +66,28 @@ def make_sample(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def calculate_score(df: pd.DataFrame) -> pd.DataFrame:
-    columns = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
+    columns = ['toxic', 'obscene', 'threat', 'insult', 'identity_hate', 'severe_toxic']
+    df['severe_toxic'] *= 2
     df['offensiveness_score'] = 0
-    for col in columns:
-        df['offensiveness_score'] += df[col] if col != 'severe_toxic' else 1.5 * df[col]
 
-    df['offensiveness_score'] = df['offensiveness_score'] / df['offensiveness_score'].max()
-    df.drop(columns, axis=1, inplace=True)
+    for col in columns:
+        df['offensiveness_score'] += df[col]
+
+    df['offensiveness_score'] = df['offensiveness_score'] / len(columns)
+    df = df[['id', 'comment_text', 'offensiveness_score']]
     return df
 
 
-def process_text(full_line: str) -> str:
+def process_text(full_line: str, full_process: bool = False) -> str:
     full_line = str(full_line)
-    full_line = re.sub(r'#([^ ]*)', r'\1', full_line)
     full_line = re.sub(r'https.*[^ ]', 'URL', full_line)
     full_line = re.sub(r'http.*[^ ]', 'URL', full_line)
     full_line = re.sub(r'@([^ ]*)', '@USER', full_line)
-    full_line = emoji.demojize(full_line)
-    full_line = re.sub(r'(:.*?:)', r' \1 ', full_line)
-    full_line = re.sub(' +', ' ', full_line)
+    if full_process:
+        full_line = re.sub(r'#([^ ]*)', r'\1', full_line)
+        full_line = emoji.demojize(full_line)
+        full_line = re.sub(r'(:.*?:)', r' \1 ', full_line)
+        full_line = re.sub(' +', ' ', full_line)
     return full_line
 
 
@@ -96,12 +97,14 @@ def process_text(full_line: str) -> str:
 @click.option('--folder_ruddit', help='Path to ruddit dataset (full path to file)', default='ruddit/Dataset/ruddit_with_text.csv')
 @click.option('--output', help='Output path', default='jigsaw_train.csv')
 @click.option('--unintended_threshold', help='Threshold for unintended dataset classification', default=0.5)
+@click.option('--text_process/--no-text_process', help='Full text preprocess', default=False)
 def main(
         folder_toxic: str,
         folder_unintended: str,
         output: str,
         unintended_threshold: float,
-        folder_ruddit: str
+        folder_ruddit: str,
+        text_process: bool
         ) -> None:
     """Tool to convert test and train dataset from
     https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge/data?select=train.csv.zip
@@ -112,22 +115,26 @@ def main(
     # --------------------------------------------------------
     print('Toxic Comment Classification Challenge')
     toxic_df = read_toxic_data(folder_toxic)
+    toxic_df = calculate_score(toxic_df)
 
     # --------------------------------------------------------
     print('Jigsaw Unintended Bias in Toxicity Classification')
     unintented_df = read_unintended_data(folder_unintended, unintended_threshold)
 
     # --------------------------------------------------------
-    total = pd.concat([toxic_df, unintented_df])
-    total = calculate_score(total)
 
     print('Ruddit dataset')
     ruddit = read_ruddit(folder_ruddit)
-    total = pd.concat([total, ruddit])
+
+    # --------------------------------------------------------
+
+    total = pd.concat([toxic_df, unintented_df, ruddit])
+    # total = unintented_df
+    total.loc[total['offensiveness_score'] > 1, 'offensiveness_score'] = 1
 
     print('Data preprocessing')
     tqdm.pandas()
-    total['comment_text'] = total['comment_text'].progress_apply(process_text)
+    total['comment_text'] = total['comment_text'].progress_apply(process_text, full_process=text_process)
 
     num_duplicates = total.duplicated(subset='comment_text').sum()
     if num_duplicates > 0:

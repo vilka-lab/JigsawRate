@@ -16,9 +16,14 @@ LoaderList = List[torch.utils.data.DataLoader]
 
 class JigsawModel(torch.nn.Module):
     def __init__(self, model_name: str = 'GroNLP/hateBERT',
-                 device: Optional[str] = None) -> None:
+                 device: Optional[str] = None,
+                 pretrained: Optional[str] = None) -> None:
         super().__init__()
-        self.backbone = AutoModel.from_pretrained(model_name)
+        if pretrained is None:
+            self.backbone = AutoModel.from_pretrained(model_name)
+        else:
+            self.backbone = AutoModel.from_pretrained(pretrained)
+
         self.fc = torch.nn.Linear(768, 1)
 
         if device is None:
@@ -26,6 +31,7 @@ class JigsawModel(torch.nn.Module):
         self.device = device
         self.to(self.device)
         self.epoch = 0
+        self.resume = False
 
 
     def forward(self, vector: Vector) -> torch.Tensor:
@@ -50,8 +56,6 @@ class JigsawModel(torch.nn.Module):
 
     def save_model(self, path: Union[Path, str]) -> None:
         path = str(path)
-        # for correct save batch norm after validation step
-        self.train()
         checkpoint = {
             'epoch': self.epoch,
             'model': self.state_dict(),
@@ -75,6 +79,7 @@ class JigsawModel(torch.nn.Module):
             self.epoch = checkpoint['epoch']
             self.optimizer.load_state_dict(checkpoint['optimizer'])
             self.scheduler = checkpoint['lr_sched']
+            self.resume = True
 
 
     def load_file(self, filename: Union[Path, str]) -> Any:
@@ -129,13 +134,25 @@ class JigsawModel(torch.nn.Module):
 
 
     def create_optimizer(self, learning_rate: float = 1e-3,
-                         weight_decay: float = 1e-3) -> None:
-        self.optimizer = torch.optim.AdamW(
+                         weight_decay: float = 1e-3,
+                         optimizer: str = 'Adam') -> None:
+        main_params = {
+            'lr': learning_rate,
+            'weight_decay': weight_decay}
+        sgd_params = main_params.copy()
+        sgd_params['momentum'] = 0.9
+
+        optimizers = {
+            'Adam': (torch.optim.Adam, main_params),
+            'AdamW': (torch.optim.AdamW, main_params),
+            'SGD': (torch.optim.SGD, sgd_params)
+            }
+
+        self.optimizer = optimizers[optimizer][0](
             self.parameters(),
-            lr=learning_rate,
-            weight_decay=weight_decay
+            **optimizers[optimizer][1]
             )
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, patience=2)
 
 
     def fit(
@@ -146,7 +163,9 @@ class JigsawModel(torch.nn.Module):
             folder: str = 'experiment',
             learning_rate: float = 1e-3,
             weight_decay: float = 1e-3,
-            save_period: int = 60*60
+            save_period: int = 60*60,
+            force_lr: bool = False,
+            optimizer: str = 'Adam'
             ) -> dict:
         if not Path(folder).exists():
             os.mkdir(folder)
@@ -156,8 +175,10 @@ class JigsawModel(torch.nn.Module):
         model_path = path.joinpath('last.pth')
 
         self.saver = self.save_each_period(model_path, save_period)
-        self.loss = torch.nn.BCEWithLogitsLoss()
-        self.create_optimizer(learning_rate, weight_decay)
+        # self.loss = torch.nn.BCEWithLogitsLoss()
+        self.loss = torch.nn.MarginRankingLoss(margin=1)
+        if not self.resume or force_lr:
+            self.create_optimizer(learning_rate, weight_decay, optimizer)
         self.scaler = torch.cuda.amp.GradScaler()
 
         # in respect for --resume flag
@@ -165,8 +186,8 @@ class JigsawModel(torch.nn.Module):
             if val_loaders is not None:
                 self._test_loop(val_loaders, storage=storage)
 
-            self.epoch += 1
             self._train_loop(train_loader, storage=storage)
+            self.epoch += 1
 
             self.save_model(model_path)
             self.save_storage(path, storage)
@@ -184,15 +205,20 @@ class JigsawModel(torch.nn.Module):
         self.train()
         losses = []
         with tqdm(total=len(train_loader)) as progress_bar:
-            for vector, target in train_loader:
+            for less_toxic_vector, _, more_toxic_vector, _ in train_loader:
                 self.optimizer.zero_grad()
 
-                vector = {key: val.to(self.device) for key, val in vector.items()}
-                target = target.to(self.device)
+                less_toxic_vector = {key: val.to(self.device) for key, val in less_toxic_vector.items()}
+                more_toxic_vector = {key: val.to(self.device) for key, val in more_toxic_vector.items()}
 
                 with torch.cuda.amp.autocast():
-                    preds = self.forward(vector)
-                    loss_val = self.loss(preds.flatten(), target)
+                    less_toxic_preds = self.forward(less_toxic_vector)
+                    more_toxic_preds = self.forward(more_toxic_vector)
+                    loss_val = self.loss(
+                        less_toxic_preds.flatten(),
+                        more_toxic_preds.flatten(),
+                        -1 * torch.ones(less_toxic_preds.shape[0], dtype=torch.float32).to(self.device)
+                        )
 
                 self.scaler.scale(loss_val).backward()
                 self.scaler.step(self.optimizer)
@@ -214,6 +240,9 @@ class JigsawModel(torch.nn.Module):
         self.eval()
         less_toxic = self.predict(val_loaders[0])
         more_toxic = self.predict(val_loaders[1])
+        print('validation score examples')
+        print(less_toxic[:10])
+        print(more_toxic[:10])
         metric_val = self.metric(less_toxic, more_toxic)
         print('Validation metric:', metric_val)
         storage['test_metrics'].append(metric_val)
@@ -242,9 +271,38 @@ class JigsawModel(torch.nn.Module):
         self.eval()
         result = []
         with torch.no_grad():
-            for vector, _ in tqdm(dataloader, disable=(not verbose)):
+            for vector, _, _, _ in tqdm(dataloader, disable=(not verbose)):
                 vector = {key: val.to(self.device) for key, val in vector.items()}
                 preds = self.forward(vector)
                 result.append(preds.cpu().detach().numpy())
         result = np.concatenate(result)
         return result
+
+
+class MarginLoss():
+    def __init__(self, delta: float = 1.0):
+        self.delta = delta
+
+    def __call__(
+            self,
+            inp: Union[torch.Tensor, torch.Tensor.cuda],
+            target: Union[torch.Tensor, torch.Tensor.cuda]
+            ) -> torch.Tensor:
+        if inp.shape[0] != target.shape[0]:
+            raise ValueError(f'Wrong shape of input data, {inp.shape}, {target.shape}')
+
+        weights = ((inp.reshape(-1, 1) > inp.reshape(1, -1)) & (target.reshape(-1, 1) < target.reshape(1, -1))).double()
+        loss = (inp.reshape(-1, 1) - inp.reshape(1, -1) + self.delta) * weights
+
+        return loss.mean()
+
+
+if __name__ == '__main__':
+    loss = MarginLoss()
+    a = torch.tensor([[0.3, 0.2, 0.6, 1.2]])
+    b = torch.tensor([[0.2, 0.1, 0.3, 1.7]])
+    print(a, b, loss(a, b))
+
+    a = torch.tensor([[0.7, 1.2, 0.6, 1.2]])
+    b = torch.tensor([[0.2, 0.1, 0.3, 1.7]])
+    print(a, b, loss(a, b))
