@@ -180,8 +180,9 @@ class JigsawModel(torch.nn.Module):
 
         model_path = path.joinpath('last.pth')
         self.saver = self.save_each_period(model_path, save_period)
+        self.objective = objective
         self.loss = self.losses[objective]
-        
+
         if not self.resume or force_lr:
             self.create_optimizer(learning_rate, weight_decay, optimizer)
         self.scaler = torch.cuda.amp.GradScaler()
@@ -210,7 +211,7 @@ class JigsawModel(torch.nn.Module):
         self.train()
         losses = []
         with tqdm(total=len(train_loader)) as progress_bar:
-            for less_toxic_vector, _, more_toxic_vector, _ in train_loader:
+            for less_toxic_vector, less_toxic_target, more_toxic_vector, more_toxic_target in train_loader:
                 self.optimizer.zero_grad()
 
                 less_toxic_vector = {key: val.to(self.device) for key, val in less_toxic_vector.items()}
@@ -219,11 +220,15 @@ class JigsawModel(torch.nn.Module):
                 with torch.cuda.amp.autocast():
                     less_toxic_preds = self.forward(less_toxic_vector)
                     more_toxic_preds = self.forward(more_toxic_vector)
-                    loss_val = self.loss(
-                        less_toxic_preds.flatten(),
-                        more_toxic_preds.flatten(),
-                        -1 * torch.ones(less_toxic_preds.shape[0], dtype=torch.float32).to(self.device)
-                        )
+                    if self.objective == 'margin':
+                        loss_val = self.loss(
+                            less_toxic_preds.flatten(),
+                            more_toxic_preds.flatten(),
+                            -1 * torch.ones(less_toxic_preds.shape[0], dtype=torch.float32).to(self.device)
+                            )
+                    else:
+                        loss_val = self.loss(less_toxic_preds, less_toxic_target.to(self.device))
+                        loss_val += self.loss(more_toxic_preds, more_toxic_target.to(self.device))
 
                 self.scaler.scale(loss_val).backward()
                 self.scaler.step(self.optimizer)
