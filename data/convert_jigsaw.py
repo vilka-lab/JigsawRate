@@ -27,7 +27,7 @@ def read_toxic_data(folder_toxic: str) -> pd.DataFrame:
     return total
 
 
-def read_unintended_data(folder_unintended: str, threshold: float) -> pd.DataFrame:
+def read_unintended_data_dense(folder_unintended: str) -> pd.DataFrame:
     folder_unintended = Path(folder_unintended)
     df = pd.read_csv(folder_unintended.joinpath('all_data.csv'))
     cols = ['id', 'comment_text', 'toxicity', 'severe_toxicity', 'obscene',
@@ -39,6 +39,24 @@ def read_unintended_data(folder_unintended: str, threshold: float) -> pd.DataFra
     df['offensiveness_score'] = df[cols_with_scores].mean(axis=1)
 
     df = df[['id', 'comment_text', 'offensiveness_score']]
+    print('Shape of unintended data:', df.shape)
+    return df
+
+
+def read_unintended_data_sparse(folder_unintended: str, threshold: float) -> pd.DataFrame:
+    folder_unintended = Path(folder_unintended)
+    df = pd.read_csv(folder_unintended.joinpath('all_data.csv'))
+    cols = ['id', 'comment_text', 'toxicity', 'severe_toxicity', 'obscene',
+            'identity_attack', 'insult', 'threat']
+    df = df[cols]
+    df = df.rename({
+        'toxicity': 'toxic',
+        'severe_toxicity': 'severe_toxic',
+        'identity_attack': 'identity_hate'},
+        axis=1)
+
+    cols_with_scores = df.drop(['id', 'comment_text'], axis=1).columns
+    df[cols_with_scores] = (df[cols_with_scores] > threshold).astype(int)
     print('Shape of unintended data:', df.shape)
     return df
 
@@ -98,13 +116,16 @@ def process_text(full_line: str, full_process: bool = False) -> str:
 @click.option('--output', help='Output path', default='jigsaw_train.csv')
 @click.option('--unintended_threshold', help='Threshold for unintended dataset classification', default=0.5)
 @click.option('--text_process/--no-text_process', help='Full text preprocess', default=False)
+@click.option('--preprocess_type', type=click.Choice(['sparse', 'dense'], case_sensitive=False),
+              help='"dense" or "sparse", see documentation for details', default='dense')
 def main(
         folder_toxic: str,
         folder_unintended: str,
         output: str,
         unintended_threshold: float,
         folder_ruddit: str,
-        text_process: bool
+        text_process: bool,
+        preprocess_type: str
         ) -> None:
     """Tool to convert test and train dataset from
     https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge/data?select=train.csv.zip
@@ -112,23 +133,23 @@ def main(
     https://www.kaggle.com/c/jigsaw-unintended-bias-in-toxicity-classification/data?select=all_data.csv
     to train dataset.
     """
-    # --------------------------------------------------------
     print('Toxic Comment Classification Challenge')
     toxic_df = read_toxic_data(folder_toxic)
-    toxic_df = calculate_score(toxic_df)
-
-    # --------------------------------------------------------
-    print('Jigsaw Unintended Bias in Toxicity Classification')
-    unintented_df = read_unintended_data(folder_unintended, unintended_threshold)
-
-    # --------------------------------------------------------
 
     print('Ruddit dataset')
     ruddit = read_ruddit(folder_ruddit)
+    
+    print('Jigsaw Unintended Bias in Toxicity Classification')
+    if preprocess_type == 'dense':
+        toxic_df = calculate_score(toxic_df)
+        unintented_df = read_unintended_data_dense(folder_unintended)
+        total = pd.concat([toxic_df, unintented_df, ruddit])
+    else:
+        unintented_df = read_unintended_data_sparse(folder_unintended, unintended_threshold)
+        total = pd.concat([toxic_df, unintented_df])
+        total = calculate_score(total)
+        total = pd.concat([total, ruddit])
 
-    # --------------------------------------------------------
-
-    total = pd.concat([toxic_df, unintented_df, ruddit])
     # total = unintented_df
     total.loc[total['offensiveness_score'] > 1, 'offensiveness_score'] = 1
 
@@ -147,7 +168,6 @@ def main(
     print('Making sample dataset to check quality')
     sample = make_sample(total)
     sample.to_csv('sample.csv', index=False)
-
 
 
 if __name__ == '__main__':
