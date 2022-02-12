@@ -32,9 +32,12 @@ def set_seed(seed=42):
 @click.option('--random_state', default=42)
 @click.option('--force_lr/--no-force_lr', help='Force set learning rate', default=False)
 @click.option('--max_length', help='Max_length param in tokenizer', default=128)
-@click.option('--optimizer', help='Adam/AdamW, SGD', default='Adam')
+@click.option('--optimizer', type=click.Choice(['Adam', 'AdamW', 'SGD'], case_sensitive=True),
+              help='Adam/AdamW, SGD', default='Adam')
 @click.option('--model_name', default='GroNLP/hateBERT')
 @click.option('--text_process/--no-text_process', help='Full text preprocess', default=False)
+@click.option('--objective', type=click.Choice(['margin', 'bce'], case_sensitive=True),
+              help='Margin loss (margin) or BCELoss(bce)', default='margin')
 def main(
         data: str,
         lr: float,
@@ -49,7 +52,8 @@ def main(
         max_length: int,
         optimizer: str,
         model_name: str,
-        text_process: bool
+        text_process: bool,
+        objective: str
         ):
     set_seed(random_state)
     torch.autograd.set_detect_anomaly(False)
@@ -95,7 +99,8 @@ def main(
         learning_rate=lr,
         force_lr=force_lr,
         weight_decay=weight_decay,
-        optimizer=optimizer
+        optimizer=optimizer,
+        objective=objective
         )
 
 

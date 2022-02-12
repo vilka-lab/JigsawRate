@@ -33,6 +33,11 @@ class JigsawModel(torch.nn.Module):
         self.epoch = 0
         self.resume = False
 
+        self.losses = {
+            'bce': torch.nn.BCEWithLogitsLoss(),
+            'margin': torch.nn.MarginRankingLoss(margin=1)
+        }
+
 
     def forward(self, vector: Vector) -> torch.Tensor:
         out = self.backbone(
@@ -165,7 +170,8 @@ class JigsawModel(torch.nn.Module):
             weight_decay: float = 1e-3,
             save_period: int = 60*60,
             force_lr: bool = False,
-            optimizer: str = 'Adam'
+            optimizer: str = 'Adam',
+            objective: str = 'margin'
             ) -> dict:
         if not Path(folder).exists():
             os.mkdir(folder)
@@ -173,10 +179,9 @@ class JigsawModel(torch.nn.Module):
         storage = self.load_storage(path)
 
         model_path = path.joinpath('last.pth')
-
         self.saver = self.save_each_period(model_path, save_period)
-        # self.loss = torch.nn.BCEWithLogitsLoss()
-        self.loss = torch.nn.MarginRankingLoss(margin=1)
+        self.loss = self.losses[objective]
+        
         if not self.resume or force_lr:
             self.create_optimizer(learning_rate, weight_decay, optimizer)
         self.scaler = torch.cuda.amp.GradScaler()

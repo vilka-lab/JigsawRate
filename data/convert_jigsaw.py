@@ -116,7 +116,7 @@ def process_text(full_line: str, full_process: bool = False) -> str:
 @click.option('--output', help='Output path', default='jigsaw_train.csv')
 @click.option('--unintended_threshold', help='Threshold for unintended dataset classification', default=0.5)
 @click.option('--text_process/--no-text_process', help='Full text preprocess', default=False)
-@click.option('--preprocess_type', type=click.Choice(['sparse', 'dense'], case_sensitive=False),
+@click.option('--preprocess_type', type=click.Choice(['sparse', 'dense'], case_sensitive=True),
               help='"dense" or "sparse", see documentation for details', default='dense')
 def main(
         folder_toxic: str,
