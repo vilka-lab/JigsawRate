@@ -227,8 +227,8 @@ class JigsawModel(torch.nn.Module):
                             -1 * torch.ones(less_toxic_preds.shape[0], dtype=torch.float32).to(self.device)
                             )
                     else:
-                        loss_val = self.loss(less_toxic_preds, less_toxic_target.to(self.device))
-                        loss_val += self.loss(more_toxic_preds, more_toxic_target.to(self.device))
+                        loss_val = self.loss(less_toxic_preds.flatten(), less_toxic_target.to(self.device))
+                        loss_val += self.loss(more_toxic_preds.flatten(), more_toxic_target.to(self.device))
 
                 self.scaler.scale(loss_val).backward()
                 self.scaler.step(self.optimizer)
