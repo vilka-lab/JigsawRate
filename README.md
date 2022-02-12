@@ -3,6 +3,18 @@ Its a solution for 99 place (top 5%) of **[Jigsaw Rate Severity of Toxic Comment
 
 Main idea: unite 3 datasets in one, then fit some different models in different modes.
 
+### Table of contents:
+  * [1. Datasets](#1-datasets)
+  * [2. Installation](#2-installation)
+  * [3. Model weights](#3-model-weights)
+  * [4. Training](#4-training)
+    + [4.1 Model 1](#41-model-1)
+    + [4.2 Model 2](#42-model-2)
+    + [4.3 Model 3](#43-model-3)
+    + [4.4 Ensemble](#44-ensemble)
+  * [5. Inference](#5-inference)
+
+
 ## 1. Datasets
 1. https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge/data
 2. https://www.kaggle.com/c/jigsaw-unintended-bias-in-toxicity-classification/data
@@ -64,9 +76,13 @@ Create environment, for example for anaconda:
     conda create --name Jigsaw --no-default-packages
     conda activate Jigsaw
     pip install -r requirements.txt
-    
-## 3. Training
-### 3.1 Model 1
+
+## 3. Model weights
+You can download model weights from here:
+https://www.kaggle.com/ivanilyushchenko/jigsawtoxic202199thplace
+
+## 4. Training
+### 4.1 Model 1
 I used sparse toxicity score fot it and pretrained *GroNLP/hateBERT*. As a loss function - binary cross entropy. Sparse mean that most of toxicity scores grouped in some ranges. Dataset scores histogramm (without 0 scores, that are majority class):
 
 ![sparse](https://user-images.githubusercontent.com/61727483/153704247-f14f4942-4134-4784-8bf6-20d2311a9ddc.png)
@@ -120,7 +136,7 @@ Validation scores histogram:
 
 ![image](https://user-images.githubusercontent.com/61727483/153704166-f4900395-306b-4df8-b24e-ad6e3c112be2.png)
 
-### 3.2 Model 2
+### 4.2 Model 2
 For this model i changed sequence length to 512, loss function to MarginRankingLoss, text preprocess and way of datasets union to dense. Dataset hist:
 
 ![dense](https://user-images.githubusercontent.com/61727483/153704703-8faaf387-3247-4972-85b5-ed7a964a3cbb.png)
@@ -173,7 +189,7 @@ Validation scores histogram:
 
 ![image](https://user-images.githubusercontent.com/61727483/153704784-b1566387-e24b-4066-aa6e-225cdefb3e09.png)
 
-### 3.3 Model 3
+### 4.3 Model 3
 Here i changed model to cardiffnlp/twitter-roberta-base-hate. Preprocess text with dense scores.
 
 Recreate dataset. 
@@ -224,7 +240,7 @@ Validation scores histogram:
 
 ![image](https://user-images.githubusercontent.com/61727483/153705552-26c15885-25e8-43f5-9628-2c89d5a10ac1.png)
 
-### 3.4 Ensemble
+### 4.4 Ensemble
 After ensembling this models (scale scores to [0; 1] range and just sum) i got 0.6988 score on validation.
 Scores:
 
@@ -238,9 +254,9 @@ For the second submission i ensebmle models with other open solutions same way w
 
 So the weights: model_1, model_2, model_3, 1st ensemble, 2nd ensemble - each for 20% contributions in final result.
 
-Validation score of 5 models: 0.7190. It was my second submission, 0.80153 on ptivate and 99th place.
+Validation score of 5 models: 0.7190. It was my second submission, 0.80153 on private and 99th place.
 
-### 4. Inference
+## 5. Inference
 ```python
 from model import JigsawModel
 from pathlib import Path
@@ -284,7 +300,7 @@ less_toxic = model.predict(val_loaders[0])
 more_toxic = model.predict(val_loaders[1])
 ```
 
-For the final inference:
+For the final inference of single model:
 ```python
 df = pd.read_csv(competition_path.joinpath('comments_to_score.csv'))
 loader = get_loader(df['text'].progress_apply(process_text, full_process=True), tokenizer, num_workers=2, batch_size=64)
