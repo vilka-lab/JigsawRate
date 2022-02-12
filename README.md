@@ -254,7 +254,7 @@ For the second submission i ensebmle models with other open solutions same way w
 
 So the weights: model_1, model_2, model_3, 1st ensemble, 2nd ensemble - each for 20% contributions in final result.
 
-Validation score of 5 models: 0.7190. It was my second submission, 0.80153 on ptivate and 99th place.
+Validation score of 5 models: 0.7190. It was my second submission, 0.80153 on private and 99th place.
 
 ## 5. Inference
 ```python
@@ -300,7 +300,7 @@ less_toxic = model.predict(val_loaders[0])
 more_toxic = model.predict(val_loaders[1])
 ```
 
-For the final inference:
+For the final inference of single model:
 ```python
 df = pd.read_csv(competition_path.joinpath('comments_to_score.csv'))
 loader = get_loader(df['text'].progress_apply(process_text, full_process=True), tokenizer, num_workers=2, batch_size=64)
